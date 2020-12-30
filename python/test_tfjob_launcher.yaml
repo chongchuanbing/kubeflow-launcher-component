@@ -40,7 +40,6 @@ spec:
               kind: TFJob
               metadata:
                 generateName: mnist-player-tfjob-demo-
-                namespace: ccb
                 annotations:
                   sidecar.istio.io/inject: "false"
               spec:

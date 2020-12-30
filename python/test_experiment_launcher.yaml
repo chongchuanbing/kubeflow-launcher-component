@@ -40,7 +40,6 @@ spec:
               apiVersion: "kubeflow.org/v1alpha3"
               kind: Experiment
               metadata:
-                namespace: ccb
                 generateName: tfjob-mnist-experiment-example-
               spec:
                 parallelTrialCount: 3
@@ -98,3 +97,9 @@ spec:
                                     - "{{.Name}}={{.Value}}"
                                     {{- end}}
                                     {{- end}}
+                                  env:
+                                    - name: NVIDIA_VISIBLE_DEVICES
+                                      value: "all"
+                                  resources:
+                                    limits:
+                                      aliyun.com/gpu-mem: 1

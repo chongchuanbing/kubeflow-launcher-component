@@ -49,7 +49,7 @@ if __name__== "__main__":
                         default=60 * 24,
                         help='Time in minutes to wait for the CRD component to reach end')
     parser.add_argument('--polling_interval_seconds', type=int,
-                        default=30,
+                        default=10,
                         help='Time in seconds to poll for the status of the CR')
     parser.add_argument('--delete_after_done', type=strtobool,
                       default=False,
@@ -71,4 +71,4 @@ if __name__== "__main__":
     spec_type = args.spec['kind']
     crd_component = StandardFactory.get_factory(spec_type, args)
 
-    crd_component.deal(args)
+    crd_component.deal()

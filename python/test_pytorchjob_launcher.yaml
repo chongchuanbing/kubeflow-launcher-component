@@ -39,7 +39,6 @@ spec:
               kind: "PyTorchJob"
               metadata:
                 generateName: mnist-player-pytorchjob-demo-
-                namespace: ccb
               spec:
                 pytorchReplicaSpecs:
                   Master:
