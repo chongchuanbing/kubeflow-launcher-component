@@ -9,7 +9,7 @@ import logging
 import time
 import os
 import asyncio
-from threading import Thread
+import threading
 
 from kubernetes import client as k8s_client
 from kubernetes.client import rest
@@ -22,7 +22,7 @@ from common import Status
 class K8sCR(object):
     def __init__(self, args):
         config.load_incluster_config()
-        self.ioloop = asyncio.get_event_loop()
+        self.ioloop = asyncio.new_event_loop()
         self.args = args
         self.group = args.group
         self.plural = args.plural
@@ -128,7 +128,21 @@ class K8sCR(object):
                     event['object'].metadata.name,
                     event['object'].status.phase))
 
-            self.watch_resources_callback(event['object'])
+            try:
+                condition_status, condition = self.watch_resources_callback(event['object'])
+            except Exception as e:
+                logging.info("%s %s.%s callback Exception. Msg: %s.",
+                             event['object'].kind, event['object'].metadata.namespace, event['object'].metadata.name, e)
+
+            if Status.Failed == condition_status:
+                logging.error("%s/%s %s.%s Failed. Msg: %s",
+                              self.group, self.plural, self.crd_component_namespace, self.crd_component_name, condition)
+                if self.args.exception_clear:
+                    self.__delete(self.crd_component_name, self.crd_component_namespace)
+
+                core_w.stop()
+                self.ioloop.stop()
+                exit(1)
             await asyncio.sleep(0)
         logging.info("__watch end")
 
@@ -146,7 +160,6 @@ class K8sCR(object):
                                    namespace=self.crd_component_namespace,
                                    plural=self.plural,
                                    field_selector=field_selector,
-                                   # timeout_seconds=self.args.polling_interval_seconds,
                                    # watch=True
                                    ):
             logging.info(
@@ -157,44 +170,57 @@ class K8sCR(object):
                     event['object'].get('metadata', {}).get('name', '')))
 
             if event["type"] == "DELETED":
-                logging.warning("Crd has been deleted. exist...")
+                logging.warning("Crd has been deleted. exit...")
+                core_w.stop()
                 self.ioloop.stop()
                 exit(1)
 
             try:
                 condition_status, condition = self.conditions_judge(event['object'])
             except Exception as e:
-                logging.error("There was a problem waiting for %s/%s %s in namespace %s; Exception: %s",
-                              self.group, self.plural, self.crd_component_name, self.crd_component_namespace, e)
+                logging.error("%s/%s %s.%s Exception. Msg: %s",
+                              self.group, self.plural, self.crd_component_namespace, self.crd_component_name, e)
                 self.__delete(self.crd_component_name, self.crd_component_namespace)
+                core_w.stop()
                 self.ioloop.stop()
                 exit(1)
 
             if Status.Succeed == condition_status:
-                logging.info("%s/%s %s in namespace %s has reached the expected condition: %s.",
-                             self.group, self.plural, self.crd_component_name, self.crd_component_namespace, condition)
+                logging.info("%s/%s %s.%s Succeed. Msg: %s.",
+                             self.group, self.plural, self.crd_component_namespace, self.crd_component_name, condition)
                 self.__expected_conditions_deal(event['object'])
 
                 if self.args.delete_after_done:
                     self.__delete(self.crd_component_name, self.crd_component_namespace)
 
                 logging.info('loop stoping...')
+                core_w.stop()
                 self.ioloop.stop()
             elif Status.Failed == condition_status:
                 # release resource
-                logging.error("There was a problem waiting for %s/%s %s in namespace %s; Msg: %s",
-                              self.group, self.plural, self.crd_component_name, self.crd_component_namespace, condition)
+                logging.error("%s/%s %s.%s Failed. Msg: %s",
+                              self.group, self.plural, self.crd_component_namespace, self.crd_component_name, condition)
                 if self.args.exception_clear:
                     self.__delete(self.crd_component_name, self.crd_component_namespace)
+
+                core_w.stop()
                 self.ioloop.stop()
                 exit(1)
             else:
-                logging.info("Current condition of %s/%s %s in namespace %s is Running. Msg: %s.",
-                             self.group, self.plural, self.crd_component_name, self.crd_component_namespace,
+                logging.info("%s/%s %s.%s Running. Msg: %s.",
+                             self.group, self.plural, self.crd_component_namespace, self.crd_component_name,
                              condition)
 
-            await asyncio.sleep(0)
+            # await asyncio.sleep(0)
         logging.info("__watch_crd end")
+
+    def start_loop(self, loop):
+        asyncio.set_event_loop(loop)
+        loop.create_task(self.__watch())
+        try:
+            loop.run_forever()
+        finally:
+            loop.close()
 
     def deal(self):
         spec = self.__set_owner_reference(self.args.spec)
@@ -207,103 +233,27 @@ class K8sCR(object):
         logging.info('crd component instance name: %s, namespace: %s' % (self.crd_component_name,
                                                                          self.crd_component_namespace))
 
-        # tasks = []
-        # if self.enable_watch():
-        #     tasks.append(asyncio.ensure_future(self.__watch()))
-        # tasks.append(asyncio.ensure_future(self.__watch_crd()))
-        # # self.ioloop.create_task(self.__monitor())
-        # try:
-        #     self.ioloop.run_until_complete(asyncio.wait(tasks))
-        # finally:
-        #     self.ioloop.close()
+        ioloop_thread = asyncio.new_event_loop()
+        t = threading.Thread(target=self.start_loop, args=(ioloop_thread,))
+        t.start()
 
-        if self.enable_watch():
-            self.ioloop.create_task(self.__watch())
         self.ioloop.create_task(self.__watch_crd())
-        # self.ioloop.create_task(self.__monitor())
         try:
             self.ioloop.run_forever()
         finally:
             self.ioloop.close()
 
-    async def __monitor(self):
-        current_inst = self.__wait_for_condition(
-            self.crd_component_namespace, self.crd_component_name,
-            timeout=datetime.timedelta(minutes=self.args.timeout_minutes),
-            polling_interval=datetime.timedelta(seconds=self.args.polling_interval_seconds),
-            exception_clear=self.args.exception_clear)
+        ioloop_thread.stop()
+        logging.info('end')
+        exit(0)
 
-        self.__expected_conditions_deal(current_inst)
-
-        if self.args.delete_after_done:
-            self.__delete(self.crd_component_name, self.crd_component_namespace)
-
-        logging.info('loop stoping...')
-        self.ioloop.stop()
-        # self.ioloop.close()
-
-    def __wait_for_condition(self,
-                             namespace,
-                             name,
-                             timeout,
-                             polling_interval,
-                             exception_clear,
-                             status_callback=None):
-        '''
-        Waits until any of the specified conditions occur.
-        :param namespace: namespace for the CR.
-        :param name: Name of the CR.
-        :param timeout: How long to wait for the CR.
-        :param polling_interval: How often to poll for the status of the CR.
-        :param exception_clear: When crd run failed, delete the crd automatically if it is True.
-        :param status_callback: (Optional): Callable. If supplied this callable is
-              invoked after we poll the CR. Callable takes a single argument which
-              is the CR.
-        :return:
-        '''
-        end_time = datetime.datetime.now() + timeout
-        while True:
-            try:
-                results = self.custom.get_namespaced_custom_object(
-                    self.group, self.version, namespace, self.plural, name)
-            except Exception as e:
-                logging.error("There was a problem waiting for %s/%s %s in namespace %s; Exception: %s",
-                              self.group, self.plural, name, namespace, e)
-                raise
-
-            if results:
-                if status_callback:
-                    status_callback(results)
-
-                try:
-                    condition_status, condition = self.conditions_judge(results)
-                except Exception as e:
-                    logging.error("There was a problem waiting for %s/%s %s in namespace %s; Exception: %s",
-                                  self.group, self.plural, name, namespace, e)
-                    self.__delete(name, namespace)
-                    exit(1)
-
-                if Status.Succeed == condition_status:
-                    logging.info("%s/%s %s in namespace %s has reached the expected condition: %s.",
-                                 self.group, self.plural, name, namespace, condition)
-                    return results
-                elif Status.Failed == condition_status:
-                    # release resource
-                    logging.error("There was a problem waiting for %s/%s %s in namespace %s; Msg: %s",
-                                  self.group, self.plural, name, namespace, condition)
-                    if exception_clear:
-                        self.__delete(name, namespace)
-                    exit(1)
-                else:
-                    if condition:
-                        logging.info("Current condition of %s/%s %s in namespace %s is Running. Msg: %s.",
-                                     self.group, self.plural, name, namespace, condition)
-
-            if datetime.datetime.now() + polling_interval > end_time:
-                raise Exception(
-                    "Timeout waiting for {0}/{1} {2} in namespace {3}".format(self.group, self.plural, name, namespace))
-
-            time.sleep(polling_interval.seconds)
+        # if self.enable_watch():
+        #     self.ioloop.create_task(self.__watch())
+        # self.ioloop.create_task(self.__watch_crd())
+        # try:
+        #     self.ioloop.run_forever()
+        # finally:
+        #     self.ioloop.close()
 
     def __create(self, spec):
         '''

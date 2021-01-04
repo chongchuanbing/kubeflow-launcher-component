@@ -29,7 +29,6 @@ class PytorchJobComponent(launcher_crd.K8sCR):
         params = {
             'namespace': self.crd_component_namespace,
             'label_selector': label_selector,
-            # 'timeout_seconds': self.args.polling_interval_seconds,
             # 'watch': True
         }
         return self.core.list_namespaced_pod, params
@@ -37,14 +36,32 @@ class PytorchJobComponent(launcher_crd.K8sCR):
     def watch_resources_callback(self, v1_pod):
         phase = v1_pod.status.phase
         if 'Failed' != phase:
-            return
+            return Status.Running, ''
 
-        pytorch_replica_type = v1_pod.metadata.labels.pytorchReplicaType
-        if 'master' != pytorch_replica_type:
+        pod_namespace = v1_pod.metadata.namespace
+        pod_name = v1_pod.metadata.name
+
+        pod_logs = self.core.read_namespaced_pod_log(name=pod_name,
+                                                     namespace=pod_namespace,
+                                                     pretty="True",
+                                                     tail_lines=self.args.tail_lines)
+        logging.warning('Pod %s.%s Failed. Log: \n%s' % (pod_namespace, pod_name, pod_logs))
+
+        pytorch_replica_type = v1_pod.metadata.labels.get('pytorch-replica-type', '')
+        if 'master' == pytorch_replica_type:
             self.master_failed_count += 1
-        elif 'worker' != pytorch_replica_type:
+        elif 'worker' == pytorch_replica_type:
             self.worker_failed_count += 1
-        pass
+
+        logging.warning('Pod %s.%s Master Failed: %d, Worker Failed: %d' % (
+            pod_namespace, pod_name, self.master_failed_count, self.worker_failed_count))
+
+        if self.master_replicas == self.master_failed_count:
+            return Status.Failed, 'Master all failed'
+        elif self.worker_replicas == self.worker_failed_count:
+            return Status.Failed, 'Worker all failed'
+
+        return Status.Running, ''
 
     def conditions_judge(self, inst):
         replica_statuses = inst.get('status', {}).get('replicaStatuses', {})
@@ -65,8 +82,8 @@ class PytorchJobComponent(launcher_crd.K8sCR):
         conditions_type = conditions[-1]["type"]
         if 'Succeeded' == conditions_type:
             return Status.Succeed, 'status.conditions.type==Succeed'
-        elif 'Failed' == conditions_type:
-            return Status.Failed, 'status.conditions.type==Failed'
+        # elif 'Failed' == conditions_type:
+        #     return Status.Failed, 'status.conditions.type==Failed'
         else:
             # 判断master和worker的pod状态和pytorchjobs的是否一致
             if self.master_replicas == self.master_failed_count:
