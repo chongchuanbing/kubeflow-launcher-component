@@ -1,7 +1,12 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: launcher-test
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: ccb
+  name: launcher-test
 rules:
   - apiGroups: [""]
     resources:
@@ -17,18 +22,18 @@ rules:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: ccb
-  namespace: ccb
+  name: launcher-test
+  namespace: launcher-test
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: ccb
+  name: launcher-test
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: ccb
+  name: launcher-test
 subjects:
   - kind: ServiceAccount
-    name: ccb
-    namespace: ccb
+    name: launcher-test
+    namespace: launcher-test

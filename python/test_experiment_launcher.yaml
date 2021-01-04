@@ -2,7 +2,7 @@ kind: Job
 apiVersion: batch/v1
 metadata:
   name: test-experiment-launcher
-  namespace: ccb
+  namespace: launcher-test
   annotations:
     sidecar.istio.io/inject: "false"
 spec:
@@ -11,7 +11,7 @@ spec:
       annotations:
         sidecar.istio.io/inject: "false"
     spec:
-      serviceAccountName: ccb
+      serviceAccountName: launcher-test
       restartPolicy: Never
       containers:
         - name: test-experiment-launcher
