@@ -45,18 +45,15 @@ if __name__== "__main__":
     parser.add_argument('--spec', type=yaml_load,
                       default={},
                       help='crd spec.')
-    parser.add_argument('--timeout_minutes', type=int,
-                        default=60 * 24,
-                        help='Time in minutes to wait for the CRD component to reach end')
-    parser.add_argument('--polling_interval_seconds', type=int,
-                        default=10,
-                        help='Time in seconds to poll for the status of the CR')
     parser.add_argument('--delete_after_done', type=strtobool,
                       default=False,
                       help='When crd done, delete the crd automatically if it is True.')
     parser.add_argument('--exception_clear', type=strtobool,
                         default=True,
                         help='When crd run failed, delete the crd automatically if it is True.')
+    parser.add_argument('--tail_lines', type=int,
+                        default=30,
+                        help='When pod failed, the number of printted logs')
 
     parser.add_argument('--output_file', type=str,
                         default='/output.txt',
