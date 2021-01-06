@@ -18,11 +18,20 @@ from kubernetes import watch
 
 from common import Status
 
+logging.basicConfig(
+    format='%(asctime)s %(filename)s[line:%(lineno)d] %(levelname)s %(message)s'
+)
+
 
 class K8sCR(object):
     def __init__(self, args):
         config.load_incluster_config()
         self.ioloop = asyncio.new_event_loop()
+        self.__core_w = watch.Watch()
+        self.__crd_w = watch.Watch()
+
+        self.__run_status = Status.Succeed
+
         self.args = args
         self.group = args.group
         self.plural = args.plural
@@ -118,8 +127,7 @@ class K8sCR(object):
         logging.info("__watch")
         f, params = self.get_watch_resources()
 
-        core_w = watch.Watch()
-        for event in core_w.stream(f, **params):
+        for event in self.__core_w.stream(f, **params):
             logging.info(
                 "Watch Event: %s %s %s.%s phase: %s" % (
                     event['type'],
@@ -138,12 +146,12 @@ class K8sCR(object):
                 logging.error("%s/%s %s.%s Failed. Msg: %s",
                               self.group, self.plural, self.crd_component_namespace, self.crd_component_name, condition)
                 if self.args.exception_clear:
-                    self.__delete(self.crd_component_name, self.crd_component_namespace)
+                    self.__delete_crd(self.crd_component_name, self.crd_component_namespace)
 
-                core_w.stop()
-                self.ioloop.stop()
-                exit(1)
-            await asyncio.sleep(0)
+                self.__core_w.stop()
+                self.__crd_w.stop()
+                self.__run_status = Status.Failed
+            # await asyncio.sleep(0)
         logging.info("__watch end")
 
     async def __watch_crd(self):
@@ -153,8 +161,7 @@ class K8sCR(object):
         '''
         logging.info("__watch_crd")
         field_selector = 'metadata.name={}'.format(self.crd_component_name)
-        core_w = watch.Watch()
-        for event in core_w.stream(self.custom.list_namespaced_custom_object,
+        for event in self.__crd_w.stream(self.custom.list_namespaced_custom_object,
                                    group=self.group,
                                    version=self.version,
                                    namespace=self.crd_component_namespace,
@@ -171,19 +178,24 @@ class K8sCR(object):
 
             if event["type"] == "DELETED":
                 logging.warning("Crd has been deleted. exit...")
-                core_w.stop()
-                self.ioloop.stop()
-                exit(1)
+                self.__core_w.stop()
+                self.__crd_w.stop()
+                # self.ioloop.stop()
+                logging.info('watch stopped')
+                self.__run_status = Status.Failed
 
             try:
                 condition_status, condition = self.conditions_judge(event['object'])
             except Exception as e:
                 logging.error("%s/%s %s.%s Exception. Msg: %s",
                               self.group, self.plural, self.crd_component_namespace, self.crd_component_name, e)
-                self.__delete(self.crd_component_name, self.crd_component_namespace)
-                core_w.stop()
-                self.ioloop.stop()
-                exit(1)
+                self.__delete_crd(self.crd_component_name, self.crd_component_namespace)
+
+                self.__core_w.stop()
+                self.__crd_w.stop()
+                # self.ioloop.stop()
+                logging.info('watch stopped')
+                self.__run_status = Status.Failed
 
             if Status.Succeed == condition_status:
                 logging.info("%s/%s %s.%s Succeed. Msg: %s.",
@@ -191,21 +203,23 @@ class K8sCR(object):
                 self.__expected_conditions_deal(event['object'])
 
                 if self.args.delete_after_done:
-                    self.__delete(self.crd_component_name, self.crd_component_namespace)
+                    self.__delete_crd(self.crd_component_name, self.crd_component_namespace)
 
-                logging.info('loop stoping...')
-                core_w.stop()
-                self.ioloop.stop()
+                self.__core_w.stop()
+                self.__crd_w.stop()
+                logging.info('watch stopped')
+                # self.ioloop.stop()
             elif Status.Failed == condition_status:
-                # release resource
                 logging.error("%s/%s %s.%s Failed. Msg: %s",
                               self.group, self.plural, self.crd_component_namespace, self.crd_component_name, condition)
                 if self.args.exception_clear:
-                    self.__delete(self.crd_component_name, self.crd_component_namespace)
+                    self.__delete_crd(self.crd_component_name, self.crd_component_namespace)
 
-                core_w.stop()
-                self.ioloop.stop()
-                exit(1)
+                self.__core_w.stop()
+                self.__crd_w.stop()
+                logging.info('watch stopped')
+                # self.ioloop.stop()
+                self.__run_status = Status.Failed
             else:
                 logging.info("%s/%s %s.%s Running. Msg: %s.",
                              self.group, self.plural, self.crd_component_namespace, self.crd_component_name,
@@ -216,11 +230,14 @@ class K8sCR(object):
 
     def start_loop(self, loop):
         asyncio.set_event_loop(loop)
-        loop.create_task(self.__watch())
+        task = loop.create_task(self.__watch())
         try:
-            loop.run_forever()
+            # loop.run_forever()
+            loop.run_until_complete(task)
         finally:
+            loop.stop()
             loop.close()
+            logging.info('loop stopped')
 
     def deal(self):
         spec = self.__set_owner_reference(self.args.spec)
@@ -237,15 +254,19 @@ class K8sCR(object):
         t = threading.Thread(target=self.start_loop, args=(ioloop_thread,))
         t.start()
 
-        self.ioloop.create_task(self.__watch_crd())
+        task = self.ioloop.create_task(self.__watch_crd())
         try:
-            self.ioloop.run_forever()
+            # self.ioloop.run_forever()
+            self.ioloop.run_until_complete(task)
+            logging.info('run_until_complete end')
         finally:
+            logging.info('ioloop stopped')
+            self.ioloop.stop()
             self.ioloop.close()
 
-        ioloop_thread.stop()
+        # ioloop_thread.stop()
         logging.info('end')
-        exit(0)
+        exit(0) if Status.Succeed == self.__run_status else exit(1)
 
         # if self.enable_watch():
         #     self.ioloop.create_task(self.__watch())
@@ -279,7 +300,7 @@ class K8sCR(object):
         except rest.ApiException as e:
             self.__log_and_raise_exception(e, "create")
 
-    def __delete(self, name, namespace):
+    def __delete_crd(self, name, namespace):
         try:
             body = {
                 # Set garbage collection so that CR won't be deleted until all
