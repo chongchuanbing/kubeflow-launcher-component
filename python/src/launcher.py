@@ -10,6 +10,7 @@ import yaml
 from experiment import ExperimentComponent
 from tfjob import TFJobComponent
 from pytorchjob import PytorchJobComponent
+from mpijob import MpiJobComponent
 
 
 def yaml_load(str):
@@ -30,6 +31,8 @@ class StandardFactory:
             return PytorchJobComponent(args)
         elif spec_type == 'Experiment':
             return ExperimentComponent(args)
+        elif spec_type == 'MPIJob':
+            return MpiJobComponent(args)
         raise TypeError('Unknown Factory.')
 
 

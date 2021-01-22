@@ -40,7 +40,7 @@ class K8sCR(object):
         self.custom = k8s_client.CustomObjectsApi(self.__api_client)
         self.core = k8s_client.CoreV1Api(self.__api_client)
 
-        self.current_pod_name = os.environ.get('POD_NAME')
+        self.current_pod_name = os.environ.get('POD_NAME') or os.environ.get("HOSTNAME")
         self.current_pod_namespace = os.environ.get('POD_NAMESPACE')
 
         self.__init_current_pod()
@@ -139,10 +139,22 @@ class K8sCR(object):
             try:
                 condition_status, condition = self.watch_resources_callback(event['object'])
             except Exception as e:
-                logging.info("%s %s.%s callback Exception. Msg: %s.",
+                logging.info("%s %s.%s callback Exception. Msg: \n%s.",
                              event['object'].kind, event['object'].metadata.namespace, event['object'].metadata.name, e)
 
-            if Status.Failed == condition_status:
+            if Status.Succeed == condition_status:
+                logging.info("%s/%s %s.%s Succeed. Msg: %s.",
+                             self.group, self.plural, self.crd_component_namespace, self.crd_component_name, condition)
+                self.__expected_conditions_deal(event['object'])
+
+                if self.args.delete_after_done:
+                    self.__delete_crd(self.crd_component_name, self.crd_component_namespace)
+
+                self.__core_w.stop()
+                self.__crd_w.stop()
+                logging.info('watch stopped')
+                # self.ioloop.stop()
+            elif Status.Failed == condition_status:
                 logging.error("%s/%s %s.%s Failed. Msg: %s",
                               self.group, self.plural, self.crd_component_namespace, self.crd_component_name, condition)
                 if self.args.exception_clear:
@@ -151,6 +163,7 @@ class K8sCR(object):
                 self.__core_w.stop()
                 self.__crd_w.stop()
                 self.__run_status = Status.Failed
+                logging.info('watch stopped')
             # await asyncio.sleep(0)
         logging.info("__watch end")
 
@@ -187,7 +200,7 @@ class K8sCR(object):
             try:
                 condition_status, condition = self.conditions_judge(event['object'])
             except Exception as e:
-                logging.error("%s/%s %s.%s Exception. Msg: %s",
+                logging.error("%s/%s %s.%s Exception. Msg: \n%s",
                               self.group, self.plural, self.crd_component_namespace, self.crd_component_name, e)
                 self.__delete_crd(self.crd_component_name, self.crd_component_namespace)
 
@@ -323,6 +336,13 @@ class K8sCR(object):
             return api_response
         except rest.ApiException as e:
             self.__log_and_raise_exception(e, "delete")
+
+    def delete_pod(self, name, namespace):
+        try:
+            self.core.delete_namespaced_pod(name, namespace, async_req=True)
+            logging.warning('delete pod, name: %s.%s' % (namespace, name))
+        except Exception as e:
+            logging.error('delete pod %s.%s Exception. Msg: \n%s' % (namespace, name, e))
 
     def __log_and_raise_exception(self, ex, action):
         message = ""
