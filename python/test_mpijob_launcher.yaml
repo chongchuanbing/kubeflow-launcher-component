@@ -16,7 +16,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: test-mpijob-launcher
-          image: harbor.ihomefnt.com/ai/kubeflow-launcher-component:v1.2.1
+          image: docker.io/chongchuanbing/kubeflow-launcher-component:v1.2.1
           imagePullPolicy: Always
           env:
             - name: POD_NAME
@@ -70,7 +70,7 @@ spec:
                                 mountPath: /root/.local/lib
                         containers:
                         - name: mpi-launcher
-                          image: harbor.ihomefnt.com/ai/horovod-mnist-player:v1
+                          image: docker.io/chongchuanbing/horovod-mnist-player:v1
                           imagePullPolicy: Always
                           command:
                             - mpirun
@@ -130,7 +130,7 @@ spec:
                                 mountPath: /root/.local/lib
                         containers:
                         - name: mpi-worker
-                          image: harbor.ihomefnt.com/ai/horovod-mnist-player:v1
+                          image: docker.io/chongchuanbing/horovod-mnist-player:v1
                           imagePullPolicy: Always
                           resources:
                             limits:
